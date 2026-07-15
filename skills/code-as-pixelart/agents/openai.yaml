@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code as Pixel Art"
+  short_description: "Turn images into editable animated pixel art"
+  default_prompt: "Use $code-as-pixel-art to convert my mascot into an editable animated sprite."

@@ -1,0 +1,26 @@
+{
+  "name": "code-as-pixelart",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @code-as-pixelart/core && npm run build -w @code-as-pixelart/cli && npm run build -w @code-as-pixelart/mcp && npm run build -w @code-as-pixelart/studio",
+    "check": "npm run build -w @code-as-pixelart/core && npm run check --workspaces --if-present",
+    "predev": "npm run build -w @code-as-pixelart/core",
+    "dev": "npm run dev -w @code-as-pixelart/studio",
+    "mcp": "npm run build -w @code-as-pixelart/core && npm run build -w @code-as-pixelart/cli && npm run build -w @code-as-pixelart/mcp && node packages/mcp/dist/bin.js",
+    "skill:install": "sh skills/code-as-pixelart/scripts/install",
+    "pretest": "npm run build -w @code-as-pixelart/core",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "npm run test:e2e -w @code-as-pixelart/studio"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

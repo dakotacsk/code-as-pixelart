@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+REPOSITORY=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd -P)
+CLI="$REPOSITORY/packages/cli/dist/bin.js"
+
+if [ ! -f "$REPOSITORY/package.json" ] || [ ! -d "$REPOSITORY/packages/cli" ]; then
+  echo "PIX framework checkout not found. Install this skill with npm run skill:install from the code-as-pixelart repository." >&2
+  exit 2
+fi
+
+if [ ! -f "$CLI" ]; then
+  if [ ! -d "$REPOSITORY/node_modules" ]; then
+    npm install --prefix "$REPOSITORY"
+  fi
+  npm run build -w @code-as-pixelart/core --prefix "$REPOSITORY"
+  npm run build -w @code-as-pixelart/cli --prefix "$REPOSITORY"
+fi
+
+exec node "$CLI" "$@"

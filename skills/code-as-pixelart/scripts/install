@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+SKILL_SOURCE=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
+CODEX_ROOT=${CODEX_HOME:-"$HOME/.codex"}
+SKILL_ROOT="$CODEX_ROOT/skills"
+TARGET="$SKILL_ROOT/code-as-pixel-art"
+
+mkdir -p "$SKILL_ROOT"
+if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
+  if [ "$(CDPATH= cd -- "$TARGET" 2>/dev/null && pwd -P || true)" = "$SKILL_SOURCE" ]; then
+    echo "Code as Pixel Art skill is already installed at $TARGET"
+    exit 0
+  fi
+  echo "Refusing to replace existing path: $TARGET" >&2
+  exit 3
+fi
+
+ln -s "$SKILL_SOURCE" "$TARGET"
+echo "Installed Code as Pixel Art skill at $TARGET"

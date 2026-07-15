@@ -1,0 +1,31 @@
+{
+  "name": "@code-as-pixelart/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "pix": "./dist/bin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "pretest": "npm run build -w @code-as-pixelart/core",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@code-as-pixelart/core": "*",
+    "pngjs": "^7.0.0",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/pngjs": "^6.0.5"
+  }
+}

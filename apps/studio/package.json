@@ -1,0 +1,29 @@
+{
+  "name": "@code-as-pixelart/studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "check": "tsc -b --pretty false",
+    "test": "vitest run src --passWithNoTests",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@code-as-pixelart/core": "*",
+    "@radix-ui/react-dialog": "^1.1.14",
+    "@radix-ui/react-tooltip": "^1.2.7",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.1",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.5.2",
+    "pngjs": "^7.0.0",
+    "vite": "^7.3.6"
+  }
+}

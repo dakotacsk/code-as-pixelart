@@ -1,0 +1,28 @@
+{
+  "name": "@code-as-pixelart/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "pix-mcp": "./dist/bin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "pretest": "npm run build -w @code-as-pixelart/core && npm run build -w @code-as-pixelart/cli",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@code-as-pixelart/cli": "*",
+    "@modelcontextprotocol/sdk": "^1.17.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30"
+  }
+}
