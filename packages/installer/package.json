@@ -1,0 +1,38 @@
+{
+  "name": "code-as-pixel-art",
+  "version": "0.1.0",
+  "description": "One-command installer for the Code as Pixel Art Codex skill and agent runtime",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "code-as-pixel-art": "./bin/code-as-pixel-art.js"
+  },
+  "files": [
+    "bin/code-as-pixel-art.js",
+    "src/installer.js"
+  ],
+  "scripts": {
+    "test": "node --test src/installer.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dakotacsk/code-as-pixelart.git"
+  },
+  "homepage": "https://github.com/dakotacsk/code-as-pixelart#readme",
+  "bugs": {
+    "url": "https://github.com/dakotacsk/code-as-pixelart/issues"
+  },
+  "keywords": [
+    "codex",
+    "agent-skill",
+    "pixel-art",
+    "sprite",
+    "gif"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

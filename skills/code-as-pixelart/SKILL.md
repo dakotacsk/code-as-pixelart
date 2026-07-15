@@ -30,7 +30,7 @@ Replace `<skill-dir>` with this skill folder:
 <skill-dir>/scripts/pix gif mascot.pixel.json --animation front-idle --scale 4 --out mascot.gif
 ```
 
-If the wrapper reports that the framework checkout is missing, ask the user for the downloaded repository path or reinstall the skill with `npm run skill:install` from the repository root.
+If the wrapper reports that the framework checkout is missing, ask the user to run `npx code-as-pixel-art install`, restart Codex, and retry.
 
 ## Safety and consistency
 

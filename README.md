@@ -58,16 +58,14 @@ The server exposes six focused tools: import an image, inspect, validate, apply 
 
 ## Install as a Codex skill
 
-Clone the repository, build the framework, and install its skill:
+Install the complete skill and agent runtime with one command:
 
 ```sh
-git clone https://github.com/dakotacsk/code-as-pixelart.git
-cd code-as-pixelart
-npm install
-npm run build
-npm run skill:install
+npx code-as-pixel-art install
 ```
 
-The installer links the self-contained [Code as Pixel Art skill](./skills/code-as-pixelart/SKILL.md) into the local Codex skill directory. Keep the cloned repository on your computer because the installed skill links back to its CLI and MCP implementation. Its bundled `scripts/pix` wrapper keeps the framework executable available from any workspace. Restart Codex after first installation so the new skill is discovered.
+The installer creates a managed framework checkout under the local Codex directory, builds the CLI and MCP runtime, and registers the [Code as Pixel Art skill](./skills/code-as-pixelart/SKILL.md). Restart Codex after installation so the new skill is discovered. Running the same command later safely fast-forwards the managed checkout and rebuilds it.
+
+For framework development, clone the repository and use the workspace commands above instead.
 
 See [the agent authoring contract](./docs/AGENT_AUTHORING.md) and [MCP setup](./docs/MCP.md) for the deterministic write, validate, render, and repair loop.
