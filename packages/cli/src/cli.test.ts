@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import sharp from "sharp";
-import { run } from "./index.js";
+import { run, startStudioServer } from "./index.js";
 
 function capture() {
   const stdout: string[] = [];
@@ -54,7 +54,8 @@ describe("pix CLI", () => {
     const importReport = JSON.parse(imported.stdout.at(-1)!);
     expect(importReport.projectHash).toMatch(/^[a-f0-9]{64}$/);
 
-    await writeFile(operations, JSON.stringify([{ type: "replacePaletteToken", tokenId: "color-01", color: "#522A22" }]));
+    const importedProject = JSON.parse(await readFile(project, "utf8"));
+    await writeFile(operations, JSON.stringify([{ type: "replacePaletteToken", tokenId: importedProject.palette[0].id, color: "#522A22" }]));
     const edited = capture();
     expect(await run(["apply", project, "--operations", operations, "--expected-hash", importReport.projectHash], edited.io)).toBe(0);
     const editReport = JSON.parse(edited.stdout.at(-1)!);
@@ -83,5 +84,25 @@ describe("pix CLI", () => {
     const output = capture();
     expect(await run(["apply", project, "--operations", operations, "--expected-hash", "stale"], output.io)).toBe(1);
     expect(JSON.parse(output.stderr[0]!).message).toContain("hash conflict");
+  });
+
+  it("opens the requested project in Studio and guards same-file saves with hashes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pix-studio-")); const project = join(directory, "mascot.pixel.json");
+    await run(["init", project], capture().io);
+    const studio = await startStudioServer(project, 0);
+    try {
+      const opened = await fetch(`${studio.url.split("/?")[0]}/api/project`).then((response) => response.json()) as { project: { name: string }; hash: string };
+      expect(opened.project.name).toBe("Field Notes");
+      const conflict = await fetch(`${studio.url.split("/?")[0]}/api/project`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: opened.project, expectedHash: "stale" }) });
+      expect(conflict.status).toBe(409);
+    } finally { await studio.close(); }
+  });
+
+  it("rejects manifests as project source and resizes source projects", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pix-doc-")); const project = join(directory, "project.pixel.json"); const manifest = join(directory, "sheet.json");
+    await run(["init", project], capture().io); await writeFile(manifest, JSON.stringify({ animationId: "walk", sourceHash: "abc", frames: [] }));
+    const rejected = capture(); expect(await run(["validate", manifest, "--json"], rejected.io)).toBe(1); expect(JSON.parse(rejected.stderr[0]!).message).toContain("sprite-sheet manifest");
+    expect(await run(["resize", project, "--width", "32", "--height", "40"], capture().io)).toBe(0);
+    expect(JSON.parse(await readFile(project, "utf8")).characters[0]).toMatchObject({ width: 32, height: 40 });
   });
 });

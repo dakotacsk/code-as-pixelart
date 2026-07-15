@@ -2,12 +2,31 @@ import type { Character, PixelProject, ValidationIssue, ValidationResult, Varian
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/;
 
-export function validateProject(project: PixelProject): ValidationResult {
+export type PixelDocumentKind = "project" | "sprite-sheet-manifest" | "unknown";
+
+export function detectDocumentKind(value: unknown): PixelDocumentKind {
+  if (!isRecord(value)) return "unknown";
+  if (value.schemaVersion === 1 && Array.isArray(value.palette) && Array.isArray(value.characters)) return "project";
+  if (Array.isArray(value.frames) && ("sourceHash" in value || "sheet" in value || "animationId" in value)) return "sprite-sheet-manifest";
+  return "unknown";
+}
+
+export function validateProject(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
   const add = (path: string, code: string, message: string, repair: string, severity: "error" | "warning" = "error") => {
     issues.push({ path, code, message, repair, severity });
   };
 
+  const kind = detectDocumentKind(input);
+  if (kind === "sprite-sheet-manifest") {
+    add("$", "SPRITE_SHEET_MANIFEST", "This is a sprite-sheet manifest, not project source.", "Open the matching .pixel.json project file instead.");
+    return { valid: false, issues };
+  }
+  if (kind !== "project") {
+    add("$", "INVALID_PROJECT_DOCUMENT", "This JSON is not a PIX project.", "Open a .pixel.json file containing schemaVersion, palette, and characters.");
+    return { valid: false, issues };
+  }
+  const project = input as PixelProject;
   if (project.schemaVersion !== 1) add("schemaVersion", "UNSUPPORTED_SCHEMA", "Only schema version 1 is supported.", "Migrate the document to schemaVersion 1.");
   if (!Number.isInteger(project.ticksPerSecond) || project.ticksPerSecond < 1) add("ticksPerSecond", "INVALID_TICKS", "ticksPerSecond must be a positive integer.", "Use an integer such as 12 or 24.");
   checkUnique(project.palette, "palette", add);
@@ -18,6 +37,10 @@ export function validateProject(project: PixelProject): ValidationResult {
   checkUnique(project.characters, "characters", add);
   project.characters.forEach((character, index) => validateCharacter(character, `characters[${index}]`, paletteIds, add));
   return { valid: !issues.some((issue) => issue.severity === "error"), issues };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 type AddIssue = (path: string, code: string, message: string, repair: string, severity?: "error" | "warning") => void;

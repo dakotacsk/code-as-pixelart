@@ -33,6 +33,7 @@ type SelectionMode = "replace" | "add" | "subtract";
 type Modal = "import" | "export" | "help" | "about" | null;
 interface PixelPoint { x: number; y: number }
 interface SelectionShape { kind: "rect" | "lasso"; points: PixelPoint[] }
+interface ProjectFileHandle { name: string; createWritable(): Promise<{ write(data: string): Promise<void>; close(): Promise<void> }> }
 
 const tools: Array<{ id: Tool; label: string; key: string; icon: IconName }> = [
   { id: "pencil", label: "Pencil", key: "B", icon: "pencil" },
@@ -74,7 +75,38 @@ export function App() {
   const [selectedFrames, setSelectedFrames] = useState<string[]>([frame.id]);
   const [undoStack, setUndoStack] = useState<PixelOperation[]>([]);
   const [redoStack, setRedoStack] = useState<PixelOperation[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [sourceInfo, setSourceInfo] = useState<{ path: string; hash: string; modifiedAt?: string } | null>(null);
+  const [lastExport, setLastExport] = useState<string>("None");
+  const [firstRun, setFirstRun] = useState(() => !window.localStorage.getItem("pix-project-v1") && !new URLSearchParams(window.location.search).has("workspace"));
   const fileInput = useRef<HTMLInputElement>(null);
+  const fileHandle = useRef<ProjectFileHandle | null>(null);
+
+  const adoptProject = useCallback((incoming: PixelProject, label: string) => {
+    const nextCharacter = incoming.characters[0]!; const nextView = nextCharacter.views[0]!; const nextFrame = nextView.frames[0]!;
+    setProject(incoming); setViewId(nextView.id); setFrameId(nextFrame.id); setLayerId(nextCharacter.layers.at(-1)!.id);
+    setForeground(incoming.palette[0]?.id ?? ""); setBackground(incoming.palette[1]?.id ?? incoming.palette[0]?.id ?? "");
+    setAnimationId(nextCharacter.animations.at(-1)?.id ?? ""); setVariantId(""); setPoseId(nextCharacter.poses[0]?.id ?? "");
+    setUndoStack([]); setRedoStack([]); setSelections([]); setPlaying(false); setDirty(false); setZoom(1); setNotice(label);
+  }, []);
+
+  useEffect(() => {
+    if (!new URLSearchParams(window.location.search).has("workspace")) return;
+    void fetch("/api/project").then(async (response) => {
+      if (!response.ok) throw new Error((await response.json() as { message?: string }).message ?? "Could not load workspace project");
+      return response.json() as Promise<{ project: PixelProject; path: string; hash: string; modifiedAt: string }>;
+    }).then((payload) => { adoptProject(payload.project, `Opened ${payload.path.split("/").at(-1)}`); setSourceInfo({ path: payload.path, hash: payload.hash, modifiedAt: payload.modifiedAt }); }).catch((error) => setNotice(`Open failed: ${error instanceof Error ? error.message : String(error)}`));
+  }, [adoptProject]);
+
+  useEffect(() => {
+    if (!sourceInfo || !new URLSearchParams(window.location.search).has("workspace")) return;
+    const poll = window.setInterval(() => { void fetch("/api/project").then((response) => response.json()).then((payload: { project: PixelProject; path: string; hash: string; modifiedAt: string }) => {
+      if (payload.hash === sourceInfo.hash) return;
+      if (dirty) { setNotice("Source changed on disk. Save will require reload or conflict resolution."); return; }
+      adoptProject(payload.project, `Reloaded external changes from ${payload.path.split("/").at(-1)}`); setSourceInfo({ path: payload.path, hash: payload.hash, modifiedAt: payload.modifiedAt });
+    }).catch(() => undefined); }, 3000);
+    return () => window.clearInterval(poll);
+  }, [sourceInfo, dirty, adoptProject]);
 
   useEffect(() => {
     const adaptPanels = () => {
@@ -109,6 +141,7 @@ export function App() {
       const inverse = invertOperation(current, operation);
       setUndoStack((stack) => [...stack, inverse].slice(-200));
       setRedoStack([]);
+      setDirty(true);
       return applyOperation(current, operation);
     });
     setNotice(message);
@@ -120,6 +153,7 @@ export function App() {
       if (!operation) return stack;
       setProject((current) => {
         setRedoStack((redo) => [...redo, invertOperation(current, operation)]);
+        setDirty(true);
         return applyOperation(current, operation);
       });
       setNotice("Undo");
@@ -133,6 +167,7 @@ export function App() {
       if (!operation) return stack;
       setProject((current) => {
         setUndoStack((undoItems) => [...undoItems, invertOperation(current, operation)]);
+        setDirty(true);
         return applyOperation(current, operation);
       });
       setNotice("Redo");
@@ -256,19 +291,29 @@ export function App() {
     blank.characters[0]!.name = "Untitled";
     for (const sourceView of blank.characters[0]!.views) for (const sourceFrame of sourceView.frames) for (const cel of Object.values(sourceFrame.cels)) cel.grid.cells.fill(null);
     for (const variant of blank.characters[0]!.variants) for (const cel of Object.values(variant.celOverrides)) cel.grid.cells.fill(null);
-    setProject(blank); setUndoStack([]); setRedoStack([]); setVariantId(""); setNotice("New 24 × 24 character");
+    fileHandle.current = null; setSourceInfo(null); adoptProject(blank, "New 24 × 24 character"); setDirty(true);
   };
 
   const importProject = async (file: File) => {
     try {
-      const imported = JSON.parse(await file.text()) as PixelProject;
+      const imported: unknown = JSON.parse(await file.text());
       const validation = validateProject(imported);
-      if (!validation.valid) throw new Error(`${validation.issues[0]!.path}: ${validation.issues[0]!.message}`);
-      setProject(imported); setUndoStack([]); setRedoStack([]); setNotice(`Opened ${file.name}`);
+      if (!validation.valid) throw new Error(`${validation.issues[0]!.message} ${validation.issues[0]!.repair}`);
+      adoptProject(imported as PixelProject, `Opened ${file.name}`); setSourceInfo({ path: file.name, hash: "browser-file" });
     } catch (error) { setNotice(`Open failed: ${error instanceof Error ? error.message : String(error)}`); }
   };
 
-  const importMascot = async (file: File, options: { width: number; height: number; colors: number; removeBackground: boolean }) => {
+  const openProjectSource = async () => {
+    const picker = (window as unknown as { showOpenFilePicker?: (options: unknown) => Promise<ProjectFileHandle[]> }).showOpenFilePicker;
+    if (!picker) { fileInput.current?.click(); return; }
+    try {
+      const [handle] = await picker({ multiple: false, types: [{ description: "PIX project source", accept: { "application/json": [".pixel.json"] } }] });
+      if (!handle) return; fileHandle.current = handle;
+      const file = await (handle as ProjectFileHandle & { getFile(): Promise<File> }).getFile(); await importProject(file);
+    } catch (error) { if (error instanceof DOMException && error.name === "AbortError") return; setNotice(`Open failed: ${error instanceof Error ? error.message : String(error)}`); }
+  };
+
+  const importMascot = async (file: File, options: { width: number; height: number; colors: number; removeBackground: boolean; backgroundTolerance: number; padding: number }) => {
     const bitmap = await createImageBitmap(file);
     try {
       const canvas = document.createElement("canvas"); canvas.width = bitmap.width; canvas.height = bitmap.height;
@@ -278,9 +323,30 @@ export function App() {
       const data = context.getImageData(0, 0, bitmap.width, bitmap.height);
       const imported = pixelateImage({ width: bitmap.width, height: bitmap.height, pixels: data.data }, { name: file.name.replace(/\.[^.]+$/, ""), ...options, cropToContent: true });
       const importedCharacter = imported.characters[0]!;
-      setProject(imported); setViewId(importedCharacter.views[0]!.id); setFrameId(importedCharacter.views[0]!.frames[0]!.id); setLayerId(importedCharacter.layers[0]!.id);
-      setVariantId(""); setPoseId("neutral"); setUndoStack([]); setRedoStack([]); setSelections([]); setNotice(`Converted ${file.name} to editable ${options.width} × ${options.height} source`);
+      fileHandle.current = null; setSourceInfo({ path: file.name, hash: "imported-image" }); adoptProject(imported, `Converted ${file.name} to editable ${options.width} × ${options.height} source`); setLayerId(importedCharacter.layers[0]!.id); setDirty(true);
     } finally { bitmap.close(); }
+  };
+
+  const saveProject = useCallback(async () => {
+    try {
+      if (sourceInfo?.hash && new URLSearchParams(window.location.search).has("workspace")) {
+        const response = await fetch("/api/project", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ project, expectedHash: sourceInfo.hash }) });
+        const payload = await response.json() as { hash?: string; message?: string; repair?: string };
+        if (!response.ok) throw new Error(`${payload.message ?? "Save failed"} ${payload.repair ?? ""}`.trim());
+        setSourceInfo((current) => current ? { ...current, hash: payload.hash ?? current.hash, modifiedAt: new Date().toISOString() } : current);
+      } else if (fileHandle.current) {
+        const writable = await fileHandle.current.createWritable(); await writable.write(`${JSON.stringify(project, null, 2)}\n`); await writable.close();
+      } else {
+        downloadJson(project, `${slug(project.name)}.pixel.json`);
+      }
+      setDirty(false); setNotice(sourceInfo ? `Saved ${sourceInfo.path}` : "Downloaded project source");
+    } catch (error) { setNotice(`Save conflict: ${error instanceof Error ? error.message : String(error)}`); }
+  }, [project, sourceInfo]);
+
+  const resizeSprite = () => {
+    const raw = window.prompt("Resize canvas to WIDTHxHEIGHT (nearest-neighbor)", `${character.width}x${character.height}`);
+    const match = raw?.match(/^(\d+)\s*x\s*(\d+)$/i); if (!match) return;
+    execute({ type: "resizeCharacter", characterId: character.id, width: Number(match[1]), height: Number(match[2]) }, `Resized to ${match[1]} × ${match[2]}`); setZoom(1);
   };
 
   useEffect(() => {
@@ -289,22 +355,22 @@ export function App() {
       const command = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (command && key === "n") { event.preventDefault(); newDocument(); }
-      if (command && key === "o") { event.preventDefault(); fileInput.current?.click(); }
-      if (command && key === "s") { event.preventDefault(); downloadJson(project, `${slug(project.name)}.pixel.json`); }
+      if (command && key === "o") { event.preventDefault(); void openProjectSource(); }
+      if (command && key === "s") { event.preventDefault(); void saveProject(); }
       if (command && event.shiftKey && key === "e") { event.preventDefault(); setModal("export"); }
       if (command && key === "a") { event.preventDefault(); setSelections([{ kind: "rect", points: [{ x: 0, y: 0 }, { x: character.width - 1, y: character.height - 1 }] }]); }
       if (event.key === "]") { event.preventDefault(); setViewId(character.views[(character.views.findIndex((item) => item.id === view.id) + 1) % character.views.length]!.id); }
     };
     window.addEventListener("keydown", handleDocumentShortcuts);
     return () => window.removeEventListener("keydown", handleDocumentShortcuts);
-  }, [project, character, view]);
+  }, [project, character, view, saveProject]);
 
   const menus = [
     { name: "File", items: [
       { label: "New 24 × 24", shortcut: "⌘N", action: newDocument },
-      { label: "Open JSON", shortcut: "⌘O", action: () => fileInput.current?.click() },
+      { label: "Open PIX project", shortcut: "⌘O", action: () => void openProjectSource() },
       { label: "Import mascot image", action: () => setModal("import") },
-      { label: "Save source", shortcut: "⌘S", action: () => downloadJson(project, `${slug(project.name)}.pixel.json`) },
+      { label: "Save project source", shortcut: "⌘S", action: () => void saveProject() },
       { label: "Export", shortcut: "⇧⌘E", action: () => setModal("export") },
     ] },
     { name: "Edit", items: [
@@ -316,6 +382,7 @@ export function App() {
       { label: "Next direction", shortcut: "]", action: () => setViewId(character.views[(character.views.findIndex((item) => item.id === view.id) + 1) % character.views.length]!.id) },
       { label: "Neutral pose", action: () => setPoseId("neutral") },
       { label: "Base variant", action: () => setVariantId("") },
+      { label: "Resize canvas", action: resizeSprite },
     ] },
     { name: "Layer", items: [
       { label: "New layer", action: addLayer }, { label: "Duplicate layer", action: duplicateLayer },
@@ -349,7 +416,7 @@ export function App() {
           <nav aria-label="Application menu">
             {menus.map((menu) => <Menu key={menu.name} name={menu.name} open={menuOpen === menu.name} onOpen={() => setMenuOpen(menuOpen === menu.name ? null : menu.name)} items={menu.items.map((item) => ({ ...item, action: () => { item.action(); setMenuOpen(null); } }))} />)}
           </nav>
-          <div className="document-title"><span>{project.name}</span><span>{character.width} × {character.height}</span></div>
+          <div className="document-title"><span>{dirty ? "● " : ""}{project.name}</span><span>{character.width} × {character.height}</span></div>
         </header>
 
         <section className="context-bar" aria-label="Tool options">
@@ -358,7 +425,7 @@ export function App() {
           {(tool === "pencil" || tool === "eraser") && <span className="context-note">1 px · pixel-perfect</span>}
           {tool === "move" && <span className="context-note">Moves the active semantic part on this cel</span>}
           <div className="mobile-panel-tabs"><button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((value) => !value)}>Timeline</button><button className={showInspector ? "active" : ""} onClick={() => setShowInspector((value) => !value)}>Inspector</button></div>
-          <label className="zoom-control">Zoom <input aria-label="Canvas zoom" type="range" min="4" max="32" step="2" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} /><output>{zoom}×</output></label>
+          <label className="zoom-control">Zoom <input aria-label="Canvas zoom" type="range" min="1" max="32" step="1" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} /><output>{zoom}×</output></label>
         </section>
 
         <aside className="tool-bar" aria-label="Drawing tools">
@@ -396,9 +463,10 @@ export function App() {
           onFrameUpdate={(target, patch) => execute({ type: "updateFrame", characterId: character.id, viewId: view.id, frameId: target.id, patch }, `Updated ${target.name}`)}
         />}
 
-        <footer className="status-bar"><span>{notice}</span><span>x {cursor.x} · y {cursor.y}</span><span>{zoom}×</span><span>{tool}</span><span>{layer.name}</span><span>{frame.name}</span><span>{character.width} × {character.height}</span></footer>
-        <input ref={fileInput} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => event.target.files?.[0] && void importProject(event.target.files[0])} />
-        <InfoDialog modal={modal} setModal={setModal} project={project} character={character} rendered={rendered} variantId={variantId} poseId={poseId} onImport={importMascot} />
+        <footer className={`status-bar ${/failed|conflict|changed on disk/i.test(notice) ? "has-error" : ""}`}><span role="status">{notice}</span><span title={sourceInfo?.path}>source {sourceInfo?.path.split("/").at(-1) ?? "unsaved"}{dirty ? " *" : ""}</span><span>export {lastExport}</span><span>x {cursor.x} · y {cursor.y}</span><span>{zoom}×</span><span>{tool}</span><span>{layer.name}</span><span>{frame.name}</span><span>{character.width} × {character.height}</span></footer>
+        <input ref={fileInput} className="visually-hidden" type="file" accept="application/json,.pixel.json" onChange={(event) => event.target.files?.[0] && void importProject(event.target.files[0])} />
+        <InfoDialog modal={modal} setModal={setModal} project={project} character={character} rendered={rendered} variantId={variantId} poseId={poseId} onImport={importMascot} onExport={setLastExport} />
+        {firstRun && <div className="welcome-overlay" role="dialog" aria-modal="true" aria-labelledby="welcome-title"><div className="welcome-panel"><PixelWordmark /><h1 id="welcome-title">Start with source</h1><p>Open a PIX project, convert a mascot image, or begin on a blank pixel canvas.</p><div><button onClick={() => { newDocument(); setFirstRun(false); }}>New project</button><button onClick={() => { setFirstRun(false); setModal("import"); }}>Import mascot</button><button onClick={() => { setFirstRun(false); void openProjectSource(); }}>Open PIX project</button><button onClick={() => setFirstRun(false)}>Explore demo</button></div></div></div>}
       </main>
     </Tooltip.Provider>
   );
@@ -433,6 +501,12 @@ function CanvasWorkspace({ character, rendered, onionFrames, zoom, showGrid, too
     window.addEventListener("keydown", down); window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   }, []);
+
+  useEffect(() => {
+    const workspace = area.current; if (!workspace) return;
+    const fit = () => { const bounds = workspace.getBoundingClientRect(); const fitted = clamp(Math.floor(Math.min((bounds.width - 48) / character.width, (bounds.height - 48) / character.height)), 1, 32); setPan({ x: 0, y: 0 }); onZoom(fitted); };
+    fit(); const observer = new ResizeObserver(fit); observer.observe(workspace); return () => observer.disconnect();
+  }, [character.width, character.height, onZoom]);
 
   useEffect(() => {
     if (!canvas.current) return;
@@ -482,7 +556,7 @@ function CanvasWorkspace({ character, rendered, onionFrames, zoom, showGrid, too
   };
   const wheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const nextZoom = clamp(zoom + (event.deltaY < 0 ? 2 : -2), 4, 32);
+    const nextZoom = clamp(zoom + (event.deltaY < 0 ? 2 : -2), 1, 32);
     if (nextZoom === zoom || !area.current) return;
     const bounds = area.current.getBoundingClientRect();
     const cursorX = event.clientX - bounds.left - pan.x;
@@ -527,7 +601,7 @@ function Inspector({ project, character, view, frame, layer, rendered, variantId
         return <button key={item.id} className={item.id === view.id ? "active" : ""} onClick={() => onView(item.id)}><MiniCanvas rendered={preview} size={48} /><span>{item.name}</span></button>;
       })}</div></section>
       <section className="field-stack"><label>Variant<select value={variantId} onChange={(event) => onVariant(event.target.value)}><option value="">Base</option>{character.variants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Pose<select value={poseId} onChange={(event) => onPose(event.target.value)}>{character.poses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></section>
-      <section><h2>Semantic palette</h2><div className="palette-grid">{project.palette.map((token) => <label key={token.id} title={`${token.name}: ${token.color}`}><input type="color" value={token.color.slice(0, 7)} onChange={(event) => onPalette(token.id, event.target.value)} /><span style={{ background: token.color }} /><b>{token.name}</b><small>{usage[token.id] ?? 0}px</small></label>)}</div></section>
+      <section><h2>Semantic palette</h2><div className="palette-grid"><label className="transparent-token"><span /><b>Transparent</b><small>eraser</small></label>{project.palette.map((token) => { const alpha = token.color.length === 9 ? Number.parseInt(token.color.slice(7), 16) : 255; return <label key={token.id} title={`${token.name}: ${token.color}`}><input type="color" value={token.color.slice(0, 7)} onChange={(event) => onPalette(token.id, `${event.target.value}${alpha < 255 ? alpha.toString(16).padStart(2, "0").toUpperCase() : ""}`)} /><span style={{ background: token.color }} /><b>{token.name}</b><input className="alpha-range" aria-label={`${token.name} alpha`} type="range" min="0" max="255" value={alpha} onChange={(event) => { const nextAlpha = Number(event.target.value); onPalette(token.id, `${token.color.slice(0, 7)}${nextAlpha < 255 ? nextAlpha.toString(16).padStart(2, "0").toUpperCase() : ""}`); }} /><small>{usage[token.id] ?? 0}px</small></label>; })}</div></section>
     </div>}
     {tab === "source" && <div className="source-panel"><div><span>Active cel</span><strong>{view.id}/{frame.id}/{layer.id}</strong></div><pre>{JSON.stringify(cel ?? null, null, 2)}</pre></div>}
     {tab === "agent" && <AgentHandoff project={project} character={character} view={view} frame={frame} rendered={rendered} />}
@@ -545,6 +619,7 @@ function Timeline({ character, view, frame, layer, project, selectedFrames, play
   const orderedLayers = [...character.layers].sort((a, b) => b.zIndex - a.zIndex);
   const clips = character.animations.filter((item) => item.viewId === view.id);
   const activeClip = clips.find((item) => item.id === animationId) ?? clips[0];
+  const clipFrameIds = new Set(activeClip?.frames.map((item) => item.frameId) ?? []);
   return <section className="timeline" aria-label="Animation timeline">
     <div className="timeline-toolbar">
       <div className="timeline-actions"><button aria-label={playing ? "Pause animation" : "Play animation"} className={playing ? "active" : ""} onClick={onPlaying}><PixelIcon name={playing ? "pause" : "play"} /></button><button aria-label="Toggle onion skin" aria-pressed={onionSkin} className={onionSkin ? "active" : ""} onClick={onOnion}><PixelIcon name="onion" /></button><button aria-label="Add layer" onClick={onAddLayer}><PixelIcon name="plus" /><span>Layer</span></button><button aria-label="Duplicate frame" onClick={onAddFrame}><PixelIcon name="plus" /><span>Frame</span></button></div>
@@ -552,7 +627,7 @@ function Timeline({ character, view, frame, layer, project, selectedFrames, play
     </div>
     <div className="timeline-grid" style={{ gridTemplateColumns: `172px repeat(${view.frames.length}, 58px) minmax(16px, 1fr)` }}>
       <div className="timeline-corner">Layers / cels</div>
-      {view.frames.map((item, index) => <button key={item.id} draggable className={`frame-header ${selectedFrames.includes(item.id) ? "selected" : ""}`} onClick={(event) => onFrame(item.id, event)} onDragStart={(event) => event.dataTransfer.setData("application/x-frame", String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const from = Number(event.dataTransfer.getData("application/x-frame")); if (Number.isInteger(from)) onFrameReorder(from, index); }}><b>{index + 1}</b><span>{item.durationTicks}t</span></button>)}
+      {view.frames.map((item, index) => <button key={item.id} draggable className={`frame-header ${selectedFrames.includes(item.id) ? "selected" : ""} ${activeClip && !clipFrameIds.has(item.id) ? "outside-clip" : ""}`} onClick={(event) => onFrame(item.id, event)} onDragStart={(event) => event.dataTransfer.setData("application/x-frame", String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const from = Number(event.dataTransfer.getData("application/x-frame")); if (Number.isInteger(from)) onFrameReorder(from, index); }}><b>{index + 1}</b><span>{item.durationTicks}t</span></button>)}
       <div className="timeline-fill" />
       {orderedLayers.map((item) => {
         const originalIndex = character.layers.findIndex((candidate) => candidate.id === item.id);
@@ -585,7 +660,7 @@ function AgentHandoff({ project, character, view, frame, rendered }: { project: 
   return <div className="agent-panel"><h2>Agent handoff</h2><p>Give an agent the source and a precise motion brief. Its edits return as normal cels, layers, and palette tokens.</p><label>Request<textarea aria-label="Agent animation request" rows={6} value={request} onChange={(event) => setRequest(event.target.value)} /></label><div className="agent-context"><span>Target</span><strong>{view.id}/{frame.id}</strong><span>Frame hash</span><code>{rendered.hash}</code></div><div className="agent-actions"><button onClick={() => downloadJson(payload(), `${slug(project.name)}.agent-request.json`)}>Download handoff</button><button onClick={() => void navigator.clipboard.writeText(prompt).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1400); })}>{copied ? "Copied" : "Copy agent prompt"}</button></div><small>For direct tool use, run the local <code>pix-mcp</code> server included with this project.</small></div>;
 }
 
-function InfoDialog({ modal, setModal, project, character, rendered, variantId, poseId, onImport }: { modal: Modal; setModal(value: Modal): void; project: PixelProject; character: Character; rendered: RenderedFrame; variantId: string; poseId: string; onImport(file: File, options: { width: number; height: number; colors: number; removeBackground: boolean }): Promise<void> }) {
+function InfoDialog({ modal, setModal, project, character, rendered, variantId, poseId, onImport, onExport }: { modal: Modal; setModal(value: Modal): void; project: PixelProject; character: Character; rendered: RenderedFrame; variantId: string; poseId: string; onImport(file: File, options: { width: number; height: number; colors: number; removeBackground: boolean; backgroundTolerance: number; padding: number }): Promise<void>; onExport(label: string): void }) {
   const [layout, setLayout] = useState<SheetLayout>("horizontal");
   const [scale, setScale] = useState(4);
   const [animationId, setAnimationId] = useState(character.animations[0]!.id);
@@ -593,28 +668,33 @@ function InfoDialog({ modal, setModal, project, character, rendered, variantId, 
   const [importSize, setImportSize] = useState(32);
   const [importColors, setImportColors] = useState(12);
   const [removeBackground, setRemoveBackground] = useState(true);
+  const [backgroundTolerance, setBackgroundTolerance] = useState(34);
+  const [padding, setPadding] = useState(1);
   const [importing, setImporting] = useState(false);
   useEffect(() => { if (!character.animations.some((item) => item.id === animationId)) setAnimationId(character.animations[0]!.id); }, [character, animationId]);
-  const exportFrame = () => downloadRendered(rendered, `${slug(character.name)}-${rendered.frameId}.png`, scale);
+  const exportFrame = () => { downloadRendered(rendered, `${slug(character.name)}-${rendered.frameId}.png`, scale); onExport(`PNG ${rendered.width * scale}×${rendered.height * scale}`); };
   const exportSheet = () => {
     const frames = renderAnimation(project, { characterId: character.id, animationId, ...(variantId ? { variantId } : {}), ...(poseId ? { poseId } : {}) });
     const sheet = packSpriteSheet(frames, layout);
     downloadPixels(sheet.pixels, sheet.width, sheet.height, `${slug(character.name)}-${animationId}.png`, scale);
+    onExport(`sheet ${sheet.width * scale}×${sheet.height * scale}`);
   };
   const exportManifest = () => {
     const frames = renderAnimation(project, { characterId: character.id, animationId, ...(variantId ? { variantId } : {}), ...(poseId ? { poseId } : {}) });
     const sheet = packSpriteSheet(frames, layout);
     downloadJson(createManifest(project, character, animationId, frames, sheet), `${slug(character.name)}-${animationId}.json`);
+    onExport("manifest JSON");
   };
   const exportGif = () => {
     const clip = character.animations.find((item) => item.id === animationId)!;
     const frames = renderAnimation(project, { characterId: character.id, animationId, ...(variantId ? { variantId } : {}), ...(poseId ? { poseId } : {}) });
     const bytes = encodeGif(frames, { ticksPerSecond: project.ticksPerSecond, scale, loop: clip.loop });
     downloadBlob(new Blob([bytes.slice().buffer], { type: "image/gif" }), `${slug(character.name)}-${animationId}.gif`);
+    onExport(`GIF ${rendered.width * scale}×${rendered.height * scale}`);
   };
   return <Dialog.Root open={modal !== null} onOpenChange={(open) => !open && setModal(null)}><Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="dialog-content" aria-describedby={undefined}>
-    {modal === "import" && <><Dialog.Title>Convert mascot image</Dialog.Title><div className="import-copy">Choose a PNG, JPEG, or WebP. PIX downsamples it into palette-token cells that remain editable one pixel at a time.</div><div className="import-fields"><label>Source image<input aria-label="Mascot image" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /></label><label>Sprite size<input aria-label="Imported sprite size" type="number" min="8" max="256" value={importSize} onChange={(event) => setImportSize(clamp(Number(event.target.value), 8, 256))} /></label><label>Palette colors<input aria-label="Imported palette colors" type="number" min="2" max="64" value={importColors} onChange={(event) => setImportColors(clamp(Number(event.target.value), 2, 64))} /></label><label className="check-field"><input type="checkbox" checked={removeBackground} onChange={(event) => setRemoveBackground(event.target.checked)} />Remove edge background</label></div><div className="import-result">{imageFile ? `${imageFile.name} · ${Math.ceil(imageFile.size / 1024)} KB` : "No image selected"}</div><div className="dialog-actions"><button disabled={!imageFile || importing} onClick={() => imageFile && void (async () => { setImporting(true); try { await onImport(imageFile, { width: importSize, height: importSize, colors: importColors, removeBackground }); setModal(null); } finally { setImporting(false); } })()}>{importing ? "Converting…" : "Convert to source"}</button></div></>}
-    {modal === "export" && <><Dialog.Title>Export source and sprites</Dialog.Title><div className="export-preview"><MiniCanvas rendered={rendered} size={144} /><div><strong>{character.name}</strong><span>{rendered.width} × {rendered.height}px · {rendered.hash}</span></div></div><div className="export-fields"><label>Animation<select value={animationId} onChange={(event) => setAnimationId(event.target.value)}>{character.animations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Sheet layout<select value={layout} onChange={(event) => setLayout(event.target.value as SheetLayout)}><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option><option value="packed">Packed</option></select></label><label>Integer scale<input type="number" min="1" max="16" value={scale} onChange={(event) => setScale(clamp(Number(event.target.value), 1, 16))} /></label></div><div className="dialog-actions"><button onClick={exportFrame}>PNG frame</button><button onClick={exportGif}>GIF animation</button><button onClick={exportSheet}>PNG sheet</button><button onClick={exportManifest}>JSON manifest</button><button onClick={() => downloadJson(project, `${slug(project.name)}.pixel.json`)}>Project source</button></div></>}
+    {modal === "import" && <><Dialog.Title>Convert mascot image</Dialog.Title><div className="import-copy">Choose a PNG, JPEG, or WebP. Transparent pixels remain transparent. The result is segmented into editable semantic parts.</div><div className="import-fields"><label>Source image<input aria-label="Mascot image" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /></label><label>Sprite size<input aria-label="Imported sprite size" type="number" min="8" max="256" value={importSize} onChange={(event) => setImportSize(clamp(Number(event.target.value), 8, 256))} /></label><label>Palette colors<input aria-label="Imported palette colors" type="number" min="2" max="64" value={importColors} onChange={(event) => setImportColors(clamp(Number(event.target.value), 2, 64))} /></label><label>Edge tolerance<input aria-label="Background tolerance" type="number" min="0" max="255" value={backgroundTolerance} onChange={(event) => setBackgroundTolerance(clamp(Number(event.target.value), 0, 255))} /></label><label>Padding<input aria-label="Sprite padding" type="number" min="0" max="32" value={padding} onChange={(event) => setPadding(clamp(Number(event.target.value), 0, 32))} /></label><label className="check-field"><input type="checkbox" checked={removeBackground} onChange={(event) => setRemoveBackground(event.target.checked)} />Remove edge background</label></div><div className="import-result">{imageFile ? `${imageFile.name} · ${Math.ceil(imageFile.size / 1024)} KB` : "No image selected"}</div><div className="dialog-actions"><button disabled={!imageFile || importing} onClick={() => imageFile && void (async () => { setImporting(true); try { await onImport(imageFile, { width: importSize, height: importSize, colors: importColors, removeBackground, backgroundTolerance, padding }); setModal(null); } finally { setImporting(false); } })()}>{importing ? "Converting…" : "Convert to source"}</button></div></>}
+    {modal === "export" && <><Dialog.Title>Export source and sprites</Dialog.Title><div className="export-preview"><MiniCanvas rendered={rendered} size={144} /><div><strong>{character.name}</strong><span>Native {rendered.width} × {rendered.height}px · preview {rendered.width * scale} × {rendered.height * scale}px</span><span>{rendered.hash}</span></div></div><div className="export-fields"><label>Animation<select value={animationId} onChange={(event) => setAnimationId(event.target.value)}>{character.animations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Sheet layout<select value={layout} onChange={(event) => setLayout(event.target.value as SheetLayout)}><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option><option value="packed">Packed</option></select></label><label>Integer scale<input type="number" min="1" max="16" value={scale} onChange={(event) => setScale(clamp(Number(event.target.value), 1, 16))} /></label></div><div className="dialog-actions"><button onClick={exportFrame}>PNG frame</button><button onClick={exportGif}>GIF animation</button><button onClick={exportSheet}>PNG sheet</button><button onClick={exportManifest}>JSON manifest</button><button onClick={() => { downloadJson(project, `${slug(project.name)}.pixel.json`); onExport("project source"); }}>Project source</button></div></>}
     {modal === "help" && <><Dialog.Title>Keyboard reference</Dialog.Title><div className="shortcut-list">{tools.map((item) => <div key={item.id}><span>{item.label}</span><kbd>{item.key}</kbd></div>)}<div><span>Temporary eyedropper</span><kbd>Alt + click</kbd></div><div><span>Pan canvas</span><kbd>Space + drag</kbd></div><div><span>Timeline</span><kbd>Tab</kbd></div><div><span>Zoom presets</span><kbd>1–6</kbd></div><div><span>Swap colors</span><kbd>X</kbd></div><div><span>Undo / redo</span><kbd>⌘Z / ⇧⌘Z</kbd></div></div></>}
     {modal === "about" && <><Dialog.Title>PIX is pixel art as source</Dialog.Title><div className="about-copy"><p>Characters are stable palettes, semantic parts, authored views, poses, variants, cels, and integer timing.</p><p>The PNG is an export. The structured project is the work.</p><code>schema v{project.schemaVersion} · deterministic renderer · {project.ticksPerSecond} ticks/s</code></div></>}
     <Dialog.Close className="dialog-close" aria-label="Close dialog">Close</Dialog.Close>

@@ -1,6 +1,6 @@
 {
   "name": "code-as-pixel-art",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "One-command installer for the Code as Pixel Art Codex skill and agent runtime",
   "type": "module",
   "license": "MIT",

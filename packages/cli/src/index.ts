@@ -17,8 +17,10 @@ import {
   type SheetLayout,
 } from "@code-as-pixelart/core";
 import { hashProject, importImageFile, readProject, writeAnimationGif, writeProjectAtomic } from "./media.js";
+import { startStudioServer } from "./studio.js";
 
 export * from "./media.js";
+export * from "./studio.js";
 
 export interface CliIO {
   stdout(message: string): void;
@@ -54,6 +56,10 @@ export async function run(argv: string[], io: CliIO = defaultIO): Promise<number
         return await gif(args, io);
       case "doctor":
         return await doctor(io);
+      case "studio":
+        return await studio(args, io);
+      case "resize":
+        return await resizeProject(args, io);
       case "help":
       case "--help":
       case "-h":
@@ -68,6 +74,27 @@ export async function run(argv: string[], io: CliIO = defaultIO): Promise<number
     io.stderr(JSON.stringify({ ok: false, code: "COMMAND_FAILED", message: error instanceof Error ? error.message : String(error) }));
     return 1;
   }
+}
+
+async function resizeProject(args: string[], io: CliIO): Promise<number> {
+  const filename = requiredFile(args); const project = await validProject(filename);
+  const characterId = value(args, "--character") ?? project.characters[0]?.id; if (!characterId) throw new Error("A valid --character is required");
+  const size = value(args, "--size"); const width = numberValue(args, "--width", size ? Number(size) : NaN); const height = numberValue(args, "--height", size ? Number(size) : NaN);
+  const updated = applyOperation(project, { type: "resizeCharacter", characterId, width, height });
+  const output = resolve(value(args, "--out") ?? filename); await writeProjectAtomic(output, updated);
+  io.stdout(JSON.stringify({ ok: true, command: "resize", output, characterId, dimensions: { width, height }, projectHash: hashProject(updated) })); return 0;
+}
+
+async function studio(args: string[], io: CliIO): Promise<number> {
+  const filename = requiredFile(args);
+  const server = await startStudioServer(filename, numberValue(args, "--port", 4173));
+  io.stdout(JSON.stringify({ ok: true, command: "studio", project: resolve(filename), url: server.url }));
+  if (!hasFlag(args, "--no-open")) {
+    const { spawn } = await import("node:child_process");
+    spawn(process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open", process.platform === "win32" ? ["/c", "start", server.url] : [server.url], { detached: true, stdio: "ignore" }).unref();
+  }
+  await new Promise<void>((resolveStop) => { const stop = () => void server.close().finally(resolveStop); process.once("SIGINT", stop); process.once("SIGTERM", stop); });
+  return 0;
 }
 
 async function init(args: string[], io: CliIO): Promise<number> {
@@ -164,6 +191,7 @@ async function importImage(args: string[], io: CliIO): Promise<number> {
     removeBackground: !hasFlag(args, "--keep-background"),
     cropToContent: !hasFlag(args, "--no-crop"),
     backgroundTolerance: numberValue(args, "--background-tolerance", 34),
+    padding: numberValue(args, "--padding", 1),
   });
   await writeProjectAtomic(output, project);
   io.stdout(JSON.stringify({ ok: true, command: "import", input: resolve(filename), output, projectHash: hashProject(project), characterId: project.characters[0]!.id, dimensions: { width: project.characters[0]!.width, height: project.characters[0]!.height }, colors: project.palette.length }));
@@ -220,7 +248,7 @@ async function animate(args: string[], io: CliIO): Promise<number> {
     for (const pixel of planned.pixels ?? []) operations.push({ type: "setPixel", characterId: character.id, viewId: sourceView.id, frameId: frame.id, layerId: pixel.layerId, x: pixel.x, y: pixel.y, tokenId: pixel.tokenId });
     references.push({ frameId: frame.id, durationTicks: frame.durationTicks });
   }
-  operations.push({ type: "addAnimation", characterId: character.id, animation: { id: plan.animation.id, name: plan.animation.name, viewId: sourceView.id, frames: references, loop: plan.animation.loop ?? true, tags: plan.animation.tags ?? ["agent-authored"] } });
+  operations.push({ type: "addAnimation", characterId: character.id, animation: { id: plan.animation.id, name: plan.animation.name, viewId: sourceView.id, frames: references, loop: plan.animation.loop ?? true, tags: plan.animation.tags ?? inferAnimationTags(plan.animation.id, plan.animation.name) } });
   const updated = applyOperation(project, { type: "batch", operations });
   const validation = validateProject(updated);
   if (!validation.valid) throw new Error(`Animation plan produced an invalid project: ${validation.issues[0]?.message}`);
@@ -228,6 +256,11 @@ async function animate(args: string[], io: CliIO): Promise<number> {
   await writeProjectAtomic(output, updated);
   io.stdout(JSON.stringify({ ok: true, command: "animate", output, animationId: plan.animation.id, frames: plan.frames.length, operations: operations.length, projectHash: hashProject(updated) }));
   return 0;
+}
+
+function inferAnimationTags(id: string, name: string): string[] {
+  const text = `${id} ${name}`.toLowerCase(); const known = ["idle", "walk", "run", "jump", "bounce", "attack", "talk", "blink"];
+  const inferred = known.filter((tag) => text.includes(tag)); return [...new Set(["agent-authored", ...inferred])];
 }
 
 async function gif(args: string[], io: CliIO): Promise<number> {
@@ -284,7 +317,7 @@ async function validProject(filename: string): Promise<PixelProject> {
 }
 
 async function loadProject(filename: string): Promise<PixelProject> {
-  return JSON.parse(await readFile(resolve(filename), "utf8")) as PixelProject;
+  return readProject(filename);
 }
 
 async function writePng(filename: string, width: number, height: number, source: Uint8ClampedArray, scale: number): Promise<void> {
@@ -335,6 +368,8 @@ Commands:
   pix apply <project.json> --operations edits.json [--expected-hash sha256] [--out project.json]
   pix animate <project.json> --plan animation.json [--expected-hash sha256] [--out project.json]
   pix gif <project.json> --animation id [--scale n] [--out animation.gif]
+  pix studio <project.pixel.json> [--port 4173] [--no-open]
+  pix resize <project.pixel.json> --width n --height n [--character id] [--out project.pixel.json]
   pix doctor
   pix render <project.json> [--character id] [--view id] [--frame id] [--pose id] [--variant id] [--scale n] [--out image.png]
   pix sheet <project.json> --animation id [--layout packed|horizontal|vertical] [--scale n] [--out sheet.png] [--manifest sheet.json]`;

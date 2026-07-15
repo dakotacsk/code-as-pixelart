@@ -37,6 +37,7 @@ npm run test:e2e
 npm run build
 node packages/cli/dist/bin.js init mara.json
 node packages/cli/dist/bin.js import mascot.png --size 32 --colors 12 --out mascot.pixel.json
+node packages/cli/dist/bin.js studio mascot.pixel.json
 node packages/cli/dist/bin.js validate mara.json --json
 node packages/cli/dist/bin.js gif mara.json --animation front-walk --scale 4 --out mara-walk.gif
 node packages/cli/dist/bin.js render mara.json --view front --frame front-idle --out mara.png
@@ -44,6 +45,10 @@ node packages/cli/dist/bin.js sheet mara.json --animation front-walk --out mara-
 ```
 
 The generated PNG files are exports. The `.pixel.json` document is the portable, diffable source of truth.
+
+`pix studio <project.pixel.json>` opens that exact source file, shows its path/hash/dirty state, and saves back to the same file with conflict detection. The browser-only `npm run dev` mode still supports downloads, but direct Studio mode is the recommended edit loop.
+
+Image import is alpha-safe and produces semantic palette roles plus separate head, body, leg, and marking layers when those regions are present. Tune edge removal with `--background-tolerance`, preserve breathing room with the default padding, then use `pix resize` for deterministic nearest-neighbor canvas changes.
 
 ## Agent tool
 
@@ -54,7 +59,7 @@ npm run build
 node packages/mcp/dist/bin.js
 ```
 
-The server exposes six focused tools: import an image, inspect, validate, apply typed operations, create a frame animation, and render PNG/GIF/sheet assets. Writes can include an expected source hash so an agent cannot silently overwrite newer pixel edits from the studio.
+The server exposes six focused tools: import an image, inspect, validate, apply typed operations, create a frame animation, and render PNG/GIF/sheet assets. Writes can include an expected source hash so an agent cannot silently overwrite newer pixel edits from the studio. Imported characters expose semantic parts so an agent can animate a leg, head, body, or markings without treating the mascot as one flat bitmap.
 
 ## Install as a Codex skill
 

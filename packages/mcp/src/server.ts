@@ -13,7 +13,7 @@ function response(result: PixResult) {
 }
 
 export function createPixelArtServer(): McpServer {
-  const server = new McpServer({ name: "code-as-pixelart", version: "0.1.0" });
+  const server = new McpServer({ name: "code-as-pixelart", version: "0.2.0" });
 
   server.registerTool("pixelart_import_image", {
     title: "Convert an image into editable pixel-art source",
@@ -26,8 +26,10 @@ export function createPixelArtServer(): McpServer {
       height: positiveInteger.min(8).max(256).default(32),
       colors: positiveInteger.min(2).max(64).default(12),
       keepBackground: z.boolean().default(false),
+      backgroundTolerance: z.number().int().min(0).max(255).default(34),
+      padding: z.number().int().min(0).max(64).default(1),
     },
-  }, async (input) => response(await invokePix(["import", input.imagePath, "--width", String(input.width), "--height", String(input.height), "--colors", String(input.colors), "--out", input.outputPath, ...(input.name ? ["--name", input.name] : []), ...(input.keepBackground ? ["--keep-background"] : [])])));
+  }, async (input) => response(await invokePix(["import", input.imagePath, "--width", String(input.width), "--height", String(input.height), "--colors", String(input.colors), "--background-tolerance", String(input.backgroundTolerance), "--padding", String(input.padding), "--out", input.outputPath, ...(input.name ? ["--name", input.name] : []), ...(input.keepBackground ? ["--keep-background"] : [])])));
 
   server.registerTool("pixelart_inspect_project", {
     title: "Inspect semantic sprite source",

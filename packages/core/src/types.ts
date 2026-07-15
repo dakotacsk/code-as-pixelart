@@ -176,6 +176,10 @@ export type PixelOperation =
   | { type: "movePart"; characterId: string; viewId: string; frameId: string; partId: string; dx: number; dy: number }
   | { type: "replacePaletteToken"; tokenId: TokenId; color: string }
   | { type: "patchPose"; characterId: string; poseId: string; partId: string; transform: PartTransform }
+  | { type: "addPart"; characterId: string; part: Part; index?: number }
+  | { type: "removePart"; characterId: string; partId: string }
+  | { type: "resizeCharacter"; characterId: string; width: number; height: number }
+  | { type: "restoreCharacter"; characterId: string; character: Character }
   | { type: "addView"; characterId: string; view: DirectionalView; index?: number; animations?: Array<{ clip: AnimationClip; index: number }> }
   | { type: "removeView"; characterId: string; viewId: string }
   | { type: "addLayer"; characterId: string; layer: Layer; cels?: Record<string, Record<string, Cel>> }

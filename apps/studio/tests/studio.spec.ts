@@ -7,6 +7,7 @@ test.beforeEach(async ({ page }) => {
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
+  await page.getByRole("button", { name: "Explore demo" }).click();
   await expect(page.getByText("Field Notes", { exact: true })).toBeVisible();
   (page as Page & { collectedErrors?: string[] }).collectedErrors = errors;
 });
@@ -25,7 +26,8 @@ test("draws, selects, picks colors, and undoes with familiar shortcuts", async (
   await page.keyboard.press("Meta+z");
   await expect(page.locator(".status-bar").getByText("Undo", { exact: true })).toBeVisible();
   await page.locator('.layer-cell:has(input[aria-label="Layer name Face"])').evaluate((element: HTMLElement) => element.click());
-  await canvas.click({ position: { x: 10 * 18 + 9, y: 6 * 18 + 9 }, modifiers: ["Alt"] });
+  const fittedZoom = (await canvas.boundingBox())!.width / 24;
+  await canvas.click({ position: { x: 10 * fittedZoom + fittedZoom / 2, y: 6 * fittedZoom + fittedZoom / 2 }, modifiers: ["Alt"] });
   await expect(page.getByRole("button", { name: "Foreground eye" })).toBeVisible();
   await page.keyboard.press("m");
   await expect(page.locator(".context-bar strong")).toHaveText("Marquee");
@@ -80,7 +82,7 @@ test("switches authored directions and variants, inspects source, and exports", 
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByRole("button", { name: "File", exact: true }).click();
   const sourceDownload = page.waitForEvent("download");
-  await page.getByRole("menuitem", { name: "Save source" }).click();
+  await page.getByRole("menuitem", { name: "Save project source" }).click();
   const source = await sourceDownload;
   const sourcePath = testInfo.outputPath("round-trip.pixel.json");
   await source.saveAs(sourcePath);
@@ -115,7 +117,7 @@ test("converts an uploaded mascot, prepares an agent handoff, and exports a GIF"
   await page.getByText("Remove edge background").getByRole("checkbox").uncheck();
   await page.getByLabel("Imported sprite size").fill("16");
   await page.getByRole("button", { name: "Convert to source" }).click();
-  await expect(page.locator(".document-title").getByText("pepper", { exact: true })).toBeVisible();
+  await expect(page.locator(".document-title")).toContainText("pepper");
   await expect(page.locator(".status-bar").getByText(/Converted pepper\.png/)).toBeVisible();
 
   await page.getByRole("tab", { name: "agent" }).click();

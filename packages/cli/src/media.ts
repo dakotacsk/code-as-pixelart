@@ -13,7 +13,13 @@ export async function importImageFile(filename: string, options: PixelateOptions
 }
 
 export async function readProject(filename: string): Promise<PixelProject> {
-  return JSON.parse(await readFile(resolve(filename), "utf8")) as PixelProject;
+  const parsed: unknown = JSON.parse(await readFile(resolve(filename), "utf8"));
+  const validation = validateProject(parsed);
+  if (!validation.valid) {
+    const issue = validation.issues[0]!;
+    throw new Error(`${issue.message} Repair: ${issue.repair}`);
+  }
+  return parsed as PixelProject;
 }
 
 export async function writeProjectAtomic(filename: string, project: PixelProject): Promise<void> {

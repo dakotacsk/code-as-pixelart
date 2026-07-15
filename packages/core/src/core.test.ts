@@ -102,8 +102,32 @@ describe("pixel project", () => {
     const project = pixelateImage({ width: 8, height: 8, pixels }, { name: "Red mascot", width: 16, height: 16, colors: 4, removeBackground: true });
     expect(validateProject(project).valid).toBe(true);
     expect(project.characters[0]!.width).toBe(16);
-    expect(project.characters[0]!.views[0]!.frames[0]!.cels.sprite!.grid.cells.filter(Boolean).length).toBeGreaterThan(0);
+    expect(Object.values(project.characters[0]!.views[0]!.frames[0]!.cels).flatMap((cel) => cel.grid.cells).filter(Boolean).length).toBeGreaterThan(0);
     expect(project.palette.length).toBeLessThanOrEqual(4);
+    expect(project.palette.every((token) => !token.color.includes("NAN"))).toBe(true);
+    expect(project.characters[0]!.parts.map((part) => part.id)).toContain("root");
+  });
+
+  it("imports fully transparent images without invalid colors or empty quantizer buckets", () => {
+    const project = pixelateImage({ width: 64, height: 64, pixels: new Uint8ClampedArray(64 * 64 * 4) }, { width: 64, height: 64, colors: 12 });
+    expect(validateProject(project).valid).toBe(true);
+    expect(project.palette).toEqual([]);
+  });
+
+  it("rejects sprite-sheet manifests with exact repair guidance", () => {
+    const result = validateProject({ animationId: "walk", sourceHash: "abc", frames: [] });
+    expect(result.valid).toBe(false);
+    expect(result.issues[0]).toMatchObject({ code: "SPRITE_SHEET_MANIFEST", message: "This is a sprite-sheet manifest, not project source." });
+  });
+
+  it("adds parts and resizes every cel with exact operation inversion", () => {
+    const project = createDemoProject();
+    const add = { type: "addPart", characterId: "mara", part: { id: "tail", name: "Tail", pivot: { x: 3, y: 8 }, parentId: "root" } } as const;
+    expect(applyOperation(applyOperation(project, add), invertOperation(project, add))).toEqual(project);
+    const resize = { type: "resizeCharacter", characterId: "mara", width: 32, height: 48 } as const;
+    const resized = applyOperation(project, resize);
+    expect(Object.values(resized.characters[0]!.views[0]!.frames[0]!.cels)[0]!.grid).toMatchObject({ width: 32, height: 48 });
+    expect(applyOperation(resized, invertOperation(project, resize))).toEqual(project);
   });
 
   it("encodes deterministic looping GIF bytes from rendered animation", () => {

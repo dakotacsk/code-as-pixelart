@@ -1,5 +1,5 @@
 import { fillRegion as fillGrid, getPixel, setPixel as setGridPixel, emptyGrid } from "./grid.js";
-import type { Cel, Character, DirectionalView, Frame, Layer, PixelOperation, PixelProject } from "./types.js";
+import type { Cel, Character, DirectionalView, Frame, Layer, PixelGrid, PixelOperation, PixelProject } from "./types.js";
 
 export function defineProject(project: PixelProject): PixelProject {
   return structuredClone(project);
@@ -51,6 +51,24 @@ export function applyOperation(project: PixelProject, operation: PixelOperation)
       const pose = character.poses.find((item) => item.id === operation.poseId);
       if (!pose) throw new Error(`Pose not found: ${operation.poseId}`);
       pose.transforms[operation.partId] = structuredClone(operation.transform);
+      break;
+    }
+    case "addPart":
+      if (character.parts.some((part) => part.id === operation.part.id)) throw new Error(`Part already exists: ${operation.part.id}`);
+      character.parts.splice(operation.index ?? character.parts.length, 0, structuredClone(operation.part));
+      break;
+    case "removePart":
+      if (character.layers.some((layer) => layer.partId === operation.partId)) throw new Error(`Cannot remove part ${operation.partId} while layers reference it`);
+      if (character.parts.some((part) => part.parentId === operation.partId)) throw new Error(`Cannot remove part ${operation.partId} while child parts reference it`);
+      character.parts = character.parts.filter((part) => part.id !== operation.partId);
+      for (const pose of character.poses) delete pose.transforms[operation.partId];
+      break;
+    case "resizeCharacter":
+      resizeCharacter(character, operation.width, operation.height);
+      break;
+    case "restoreCharacter": {
+      const index = next.characters.findIndex((item) => item.id === operation.characterId);
+      next.characters[index] = structuredClone(operation.character);
       break;
     }
     case "addView":
@@ -195,6 +213,17 @@ export function invertOperation(project: PixelProject, operation: PixelOperation
       const previous = pose?.transforms[operation.partId] ?? { x: 0, y: 0, flipX: false, visible: true };
       return { ...operation, transform: structuredClone(previous) };
     }
+    case "addPart":
+      return { type: "removePart", characterId: operation.characterId, partId: operation.part.id };
+    case "removePart": {
+      const part = character.parts.find((item) => item.id === operation.partId);
+      if (!part) throw new Error(`Part not found: ${operation.partId}`);
+      return { type: "addPart", characterId: operation.characterId, part: structuredClone(part), index: character.parts.findIndex((item) => item.id === operation.partId) };
+    }
+    case "resizeCharacter":
+      return { type: "restoreCharacter", characterId: operation.characterId, character: structuredClone(character) };
+    case "restoreCharacter":
+      return { type: "restoreCharacter", characterId: operation.characterId, character: structuredClone(character) };
     case "addView":
       return { type: "removeView", characterId: operation.characterId, viewId: operation.view.id };
     case "removeView": {
@@ -260,6 +289,32 @@ export function invertOperation(project: PixelProject, operation: PixelOperation
       return { ...operation, patch };
     }
   }
+}
+
+function resizeCharacter(character: Character, width: number, height: number): void {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 512 || height > 512) throw new Error("Character dimensions must be integers from 1 to 512");
+  const oldWidth = character.width; const oldHeight = character.height;
+  const scalePoint = (point: { x: number; y: number }) => ({ x: Math.round(point.x * width / oldWidth), y: Math.round(point.y * height / oldHeight) });
+  for (const view of character.views) for (const frame of view.frames) for (const cel of Object.values(frame.cels)) {
+    cel.grid = resizeGrid(cel.grid, width, height);
+    cel.offset = scalePoint(cel.offset);
+  }
+  character.width = width; character.height = height;
+  character.origin = scalePoint(character.origin); character.pivot = scalePoint(character.pivot);
+  character.bounds = { ...scalePoint(character.bounds), width, height };
+  character.anchors = Object.fromEntries(Object.entries(character.anchors).map(([id, point]) => [id, scalePoint(point)]));
+  character.parts.forEach((part) => { part.pivot = scalePoint(part.pivot); });
+  character.poses.forEach((pose) => Object.values(pose.transforms).forEach((transform) => Object.assign(transform, scalePoint(transform))));
+}
+
+function resizeGrid(grid: PixelGrid, width: number, height: number): PixelGrid {
+  const resized = emptyGrid(width, height);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const sourceX = Math.min(grid.width - 1, Math.floor(x * grid.width / width));
+    const sourceY = Math.min(grid.height - 1, Math.floor(y * grid.height / height));
+    resized.cells[y * width + x] = grid.cells[sourceY * grid.width + sourceX] ?? null;
+  }
+  return resized;
 }
 
 function addLayer(character: Character, layer: Layer, cels?: Record<string, Record<string, Cel>>): void {

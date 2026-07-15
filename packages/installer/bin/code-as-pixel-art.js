@@ -6,7 +6,7 @@ const [command, ...args] = process.argv.slice(2);
 if (command === "install") {
   await install({ update: !args.includes("--no-update") });
 } else if (command === "--version" || command === "-v") {
-  process.stdout.write("0.1.0\n");
+  process.stdout.write("0.2.0\n");
 } else if (!command || command === "help" || command === "--help" || command === "-h") {
   printHelp();
 } else {
