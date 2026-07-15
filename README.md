@@ -11,9 +11,11 @@ The repository contains four workspaces:
 - `@code-as-pixelart/mcp`: a local MCP server that gives coding agents narrow, validated pixel-art tools.
 - `@code-as-pixelart/studio`: a browser editor using the familiar toolbar, canvas, inspector, palette, and layer/frame/cel timeline of established pixel-art tools.
 
-## Start the studio
+## Download and start the studio
 
 ```sh
+git clone https://github.com/dakotacsk/code-as-pixelart.git
+cd code-as-pixelart
 npm install
 npm run dev
 ```
@@ -56,14 +58,16 @@ The server exposes six focused tools: import an image, inspect, validate, apply 
 
 ## Install as a Codex skill
 
-After downloading or cloning this repository:
+Clone the repository, build the framework, and install its skill:
 
 ```sh
+git clone https://github.com/dakotacsk/code-as-pixelart.git
+cd code-as-pixelart
 npm install
 npm run build
 npm run skill:install
 ```
 
-The installer links the self-contained [Code as Pixel Art skill](./skills/code-as-pixelart/SKILL.md) into the local Codex skill directory. Its bundled `scripts/pix` wrapper keeps the framework executable available from any workspace. Restart Codex after first installation so the new skill is discovered.
+The installer links the self-contained [Code as Pixel Art skill](./skills/code-as-pixelart/SKILL.md) into the local Codex skill directory. Keep the cloned repository on your computer because the installed skill links back to its CLI and MCP implementation. Its bundled `scripts/pix` wrapper keeps the framework executable available from any workspace. Restart Codex after first installation so the new skill is discovered.
 
 See [the agent authoring contract](./docs/AGENT_AUTHORING.md) and [MCP setup](./docs/MCP.md) for the deterministic write, validate, render, and repair loop.
